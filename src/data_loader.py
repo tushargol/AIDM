@@ -257,6 +257,31 @@ class DigitalTwinDataLoader:
             'topology': topology_df
         }
     
+    def get_example_element_names(self) -> Dict[str, List[str]]:
+        """
+        Get example element names that can be used with the API.
+        Based on the digital-twin-dataset documentation.
+        
+        Returns:
+            Dictionary with example element names for different data types
+        """
+        return {
+            'magnitude': [
+                'egauge_1-CT1', 'egauge_1-CT2', 'egauge_1-CT3',
+                'egauge_2-CT1', 'egauge_2-CT2', 'egauge_2-CT3',
+                'egauge_3-CT1', 'egauge_3-CT2', 'egauge_3-CT3'
+            ],
+            'phasor': [
+                'egauge_1-L1', 'egauge_1-L2', 'egauge_1-L3',
+                'egauge_2-L1', 'egauge_2-L2', 'egauge_2-L3',
+                'egauge_3-L1', 'egauge_3-L2', 'egauge_3-L3'
+            ],
+            'waveform': [
+                'egauge_1-CT1', 'egauge_1-CT2',
+                'egauge_2-CT1', 'egauge_2-CT2'
+            ]
+        }
+    
     def load_api_data(self, 
                      magnitudes_for: List[str] = None,
                      phasors_for: List[str] = None,
@@ -270,30 +295,56 @@ class DigitalTwinDataLoader:
             magnitudes_for: List of element names for magnitude data
             phasors_for: List of element names for phasor data
             waveforms_for: List of element names for waveform data
-            time_range: Tuple of (start_time, end_time)
-            resolution: Time resolution string
+            time_range: Tuple of (start_time, end_time) - can be datetime objects or ISO strings
+            resolution: Time resolution (e.g., '1min', '10s') or timedelta object
             
         Returns:
             Dictionary containing loaded data
+            
+        Example:
+            from datetime import datetime, timedelta
+            
+            # Load magnitude data for June 2024
+            data = loader.load_api_data(
+                magnitudes_for=["egauge_1-CT1"],
+                time_range=(datetime(2024, 6, 1), datetime(2024, 7, 1)),
+                resolution=timedelta(minutes=1)
+            )
         """
         if not self.use_api or self.api_client is None:
-            raise RuntimeError("API client not available or not enabled")
+            raise RuntimeError("API client not available or not enabled. "
+                             "Set use_api=True and ensure DatasetApiClient is available.")
         
-        # Use API client to download data
-        data = self.api_client.download_data(
-            magnitudes_for=magnitudes_for or [],
-            phasors_for=phasors_for or [],
-            waveforms_for=waveforms_for or [],
-            time_range=time_range,
-            resolution=resolution
-        )
+        # Use default example elements if none provided
+        if not any([magnitudes_for, phasors_for, waveforms_for]):
+            examples = self.get_example_element_names()
+            magnitudes_for = examples['magnitude'][:2]  # Use first 2 elements
+            logger.info(f"Using default magnitude elements: {magnitudes_for}")
         
-        return data
+        try:
+            # Use API client to download data
+            data = self.api_client.download_data(
+                magnitudes_for=magnitudes_for or [],
+                phasors_for=phasors_for or [],
+                waveforms_for=waveforms_for or [],
+                time_range=time_range,
+                resolution=resolution
+            )
+            
+            logger.info(f"Successfully loaded API data with {len(data)} modalities")
+            return data
+            
+        except Exception as e:
+            logger.error(f"Failed to load API data: {e}")
+            logger.info("Note: API access requires GitHub authentication. "
+                       "Submit a ticket at https://forms.office.com/r/Ds6rKEtyTV to get access.")
+            raise
 
 
 def load_sample_data(dataset_path: str, 
                     small_data_mode: bool = True,
-                    synthetic_fallback: bool = True) -> Dict[str, pd.DataFrame]:
+                    synthetic_fallback: bool = True,
+                    use_api: bool = False) -> Dict[str, pd.DataFrame]:
     """
     Convenience function to load sample data for development and testing.
     
@@ -301,11 +352,12 @@ def load_sample_data(dataset_path: str,
         dataset_path: Path to the dataset
         small_data_mode: Whether to use only a small subset of data
         synthetic_fallback: Whether to generate synthetic data if real data unavailable
+        use_api: Whether to attempt API access for real data
         
     Returns:
         Dictionary containing loaded timeseries data
     """
-    loader = DigitalTwinDataLoader(dataset_path)
+    loader = DigitalTwinDataLoader(dataset_path, use_api=use_api)
     
     try:
         # Try to load real topology data
@@ -317,6 +369,37 @@ def load_sample_data(dataset_path: str,
             topology_file = available_files['topology'][0]
             data['topology'] = loader.load_timeseries(topology_file, 'topology')
             logger.info(f"Loaded topology data from {topology_file}")
+        
+        # Try to load API data if enabled
+        if use_api and loader.api_client is not None:
+            try:
+                from datetime import datetime, timedelta
+                
+                # Load a small sample of real data
+                if small_data_mode:
+                    # Load 1 hour of data at 1-minute resolution
+                    api_data = loader.load_api_data(
+                        magnitudes_for=["egauge_1-CT1"],
+                        time_range=(datetime(2024, 6, 1), datetime(2024, 6, 1, 1)),
+                        resolution=timedelta(minutes=1)
+                    )
+                else:
+                    # Load 1 day of data at 10-second resolution
+                    api_data = loader.load_api_data(
+                        magnitudes_for=["egauge_1-CT1", "egauge_1-CT2"],
+                        phasors_for=["egauge_1-L1", "egauge_1-L2"],
+                        time_range=(datetime(2024, 6, 1), datetime(2024, 6, 2)),
+                        resolution=timedelta(seconds=10)
+                    )
+                
+                if api_data:
+                    data.update(api_data)
+                    logger.info("Successfully loaded real data via API")
+                    return data
+                    
+            except Exception as e:
+                logger.warning(f"API data loading failed: {e}")
+                logger.info("Falling back to local/synthetic data")
         
         # If no real measurement data available, use synthetic data
         if synthetic_fallback and not any(available_files.get(mod) for mod in ['magnitude', 'phasor', 'waveform']):

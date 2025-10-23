@@ -137,17 +137,24 @@ attacks:
 ### 3. Run Complete Pipeline
 
 ```bash
-# Step 1: Preprocess data
-python src/preprocess.py --mode small_data
+# Step 1: Generate attack datasets using sample data
+python src/attacks.py --type all --experiment comprehensive_attacks --samples 5000
 
-# Step 2: Generate attack datasets
-python src/attacks.py --type all --experiment comprehensive_attacks
+# Step 2: Preprocess data (if needed)
+python src/preprocess.py --mode small_data
 
 # Step 3: Train IDS classifiers
 python src/train_ids.py --model all
 
-# Step 4: Run evaluation (via notebook)
-jupyter notebook notebooks/notebook_3_train_evaluate.ipynb
+# Step 4: Run evaluation and visualization
+jupyter notebook notebooks/notebook_4_attack_visualization.ipynb
+```
+
+### 3.1 Quick Demo
+
+```bash
+# Run the demonstration script to see attack generation in action
+python demo_attack_generation.py
 ```
 
 ## Usage Examples
@@ -175,11 +182,11 @@ for key in data.files:
 ### Attack Generation
 
 ```bash
-# Generate FDIA attacks
-python src/attacks.py --type fdia --samples 1000 --experiment fdia_test
+# Generate FDIA attacks using sample data
+python src/attacks.py --type fdia --samples 2000 --experiment fdia_test
 
-# Generate all attack types
-python src/attacks.py --type all --samples 2000 --experiment comprehensive_attacks
+# Generate all attack types with comprehensive dataset
+python src/attacks.py --type all --samples 5000 --experiment comprehensive_attacks
 
 # Generate temporal stealth attacks
 python src/attacks.py --type temporal_stealth --experiment stealth_attacks
@@ -188,10 +195,26 @@ python src/attacks.py --type temporal_stealth --experiment stealth_attacks
 python -c "
 import numpy as np
 data = np.load('./outputs/experiments/comprehensive_attacks_attacks.npz')
-print(f'Attack dataset: {data[\"measurements\"].shape}')
-print(f'Attack ratio: {np.mean(data[\"labels\"]):.2%}')
+print(f'Total samples: {len(data[\"labels\"])}')
+print(f'Clean samples: {np.sum(data[\"labels\"] == 0)} ({np.mean(data[\"labels\"] == 0)*100:.1f}%)')
+print(f'Attack samples: {np.sum(data[\"labels\"] == 1)} ({np.mean(data[\"labels\"] == 1)*100:.1f}%)')
+print(f'Attack types: {np.unique(data[\"attack_types\"])}')
 "
 ```
+
+#### Attack Dataset Structure
+
+The generated attack datasets contain:
+- **`_attacks.npz`**: Complete dataset for IDS training (70% clean, 30% attacks)
+- **`_clean_data.npz`**: Clean measurements only
+- **`_attack_data.npz`**: Attack measurements only  
+- **`_metadata.json`**: Dataset information and statistics
+
+Each dataset includes:
+- `measurements`: Power system measurements (voltage magnitudes, phasors, etc.)
+- `labels`: Binary labels (0=clean, 1=attack)
+- `attack_types`: Type of attack ('clean', 'fdia', 'temporal_stealth', 'replay')
+- `timestamps`: Time information for temporal analysis
 
 ### Model Training
 
@@ -437,6 +460,11 @@ python src/preprocess.py --mode small_data 2>&1 | grep -E "(shape|INFO|ERROR)"
 
 ## References and Documentation
 
+### Mathematical and Scientific Foundations
+
+For detailed mathematical foundations, algorithms, and scientific principles behind AIDM, see:
+- **[MATH_AND_SCIENCE.md](MATH_AND_SCIENCE.md)** - Comprehensive mathematical documentation
+
 ### Key Components
 
 - **Autoencoder**: Dense neural network for reconstruction-based anomaly detection
@@ -445,6 +473,33 @@ python src/preprocess.py --mode small_data 2>&1 | grep -E "(shape|INFO|ERROR)"
 - **Fusion Classifier**: Meta-learning approach combining multiple detectors
 - **FDIA (False Data Injection Attack)**: Power system specific attack using measurement Jacobian
 - **ART Integration**: Adversarial robustness evaluation using state-of-the-art attacks
+
+### Data Access Options
+
+AIDM supports multiple data sources:
+
+1. **Sample Dataset** (Default): Local sample data for development
+2. **Full Dataset via API**: Access to >10TB real-world data via REST API
+   - Requires GitHub authentication ([request access](https://forms.office.com/r/Ds6rKEtyTV))
+   - Supports magnitude, phasor, and waveform data
+   - Example usage:
+   ```python
+   from src.data_loader import DigitalTwinDataLoader
+   from datetime import datetime, timedelta
+   
+   loader = DigitalTwinDataLoader("./digital-twin-dataset/digital-twin-dataset", use_api=True)
+   data = loader.load_api_data(
+       magnitudes_for=["egauge_1-CT1"],
+       time_range=(datetime(2024, 6, 1), datetime(2024, 6, 2)),
+       resolution=timedelta(minutes=1)
+   )
+   ```
+
+### Visualization and Analysis
+
+- **[notebook_4_attack_visualization.ipynb](notebooks/notebook_4_attack_visualization.ipynb)** - Interactive attack visualization
+- **Attack Visualizer** (`src/visualize_attacks.py`) - Comprehensive plotting tools
+- **Interactive Dashboards** - Real-time attack analysis and detection performance
 
 ### Configuration Parameters
 

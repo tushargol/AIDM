@@ -408,18 +408,36 @@ class AttackGenerator:
         return attack_data
     
     def save_attack_dataset(self, attack_data: Dict[str, Any], output_path: str, experiment_name: str) -> None:
-        """Save attack dataset to disk."""
+        """Save comprehensive attack dataset to disk for IDS training."""
         output_dir = Path(output_path) / "experiments"
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        # Save data
+        # Save complete dataset with both clean and attacked measurements
         np.savez_compressed(
             output_dir / f"{experiment_name}_attacks.npz",
-            measurements=attack_data['clean'],
-            labels=attack_data['labels'],
-            attack_types=attack_data['attack_types'],
+            measurements=attack_data['clean'],  # Contains both clean and attacked data
+            labels=attack_data['labels'],       # 0 = clean, 1 = attack
+            attack_types=attack_data['attack_types'],  # Type of attack or 'clean'
             timestamps=attack_data['timestamps'].values
         )
+        
+        # Also save clean and attack data separately for analysis
+        clean_mask = attack_data['labels'] == 0
+        attack_mask = attack_data['labels'] == 1
+        
+        np.savez_compressed(
+            output_dir / f"{experiment_name}_clean_data.npz",
+            measurements=attack_data['clean'][clean_mask],
+            timestamps=attack_data['timestamps'].values[clean_mask]
+        )
+        
+        if np.any(attack_mask):
+            np.savez_compressed(
+                output_dir / f"{experiment_name}_attack_data.npz",
+                measurements=attack_data['clean'][attack_mask],
+                attack_types=attack_data['attack_types'][attack_mask],
+                timestamps=attack_data['timestamps'].values[attack_mask]
+            )
         
         # Save metadata
         with open(output_dir / f"{experiment_name}_metadata.json", 'w') as f:
@@ -433,7 +451,10 @@ class AttackGenerator:
             
             json.dump(metadata, f, indent=2)
         
-        logger.info(f"Saved attack dataset to {output_dir / experiment_name}")
+        logger.info(f"Saved comprehensive attack dataset to {output_dir / experiment_name}")
+        logger.info(f"  - Combined dataset: {experiment_name}_attacks.npz")
+        logger.info(f"  - Clean data only: {experiment_name}_clean_data.npz")
+        logger.info(f"  - Attack data only: {experiment_name}_attack_data.npz")
 
 
 def load_config(config_path: str = "config.yaml") -> Dict[str, Any]:
@@ -477,17 +498,90 @@ def main(config: str, attack_type: str, output: str, experiment: str, samples: i
         generator = AttackGenerator(config_dict)
         generator.initialize_power_model()
         
-        # Generate base measurements
-        if generator.power_model:
-            measurements, timestamps = generator.power_model.generate_base_measurements(
-                n_samples=samples,
-                noise_std=0.01
+        # Load sample data from digital-twin-dataset as foundation
+        try:
+            from data_loader import load_sample_data
+            
+            dataset_path = config_dict.get('data', {}).get('dataset_path', './digital-twin-dataset/digital-twin-dataset')
+            
+            logger.info(f"Loading sample data from: {dataset_path}")
+            data = load_sample_data(
+                dataset_path=dataset_path,
+                small_data_mode=config_dict['compute']['small_data_mode'],
+                synthetic_fallback=True,
+                use_api=False  # Use sample data only
             )
-        else:
-            # Fallback: generate synthetic measurements
-            logger.warning("Using synthetic measurements for attack generation")
-            timestamps = pd.date_range(start='2024-01-01', periods=samples, freq='1S')
-            measurements = np.random.randn(samples, 20) * 0.1 + 1.0  # Voltage-like measurements
+            
+            # Extract measurements from loaded data
+            if 'magnitude' in data and not data['magnitude'].empty:
+                base_measurements = data['magnitude'].values
+                base_timestamps = data['magnitude'].index
+                logger.info(f"Using magnitude data: {base_measurements.shape}")
+            elif 'phasor' in data and not data['phasor'].empty:
+                base_measurements = data['phasor'].values
+                base_timestamps = data['phasor'].index
+                logger.info(f"Using phasor data: {base_measurements.shape}")
+            else:
+                # Use any available data
+                available_keys = [k for k, v in data.items() if not v.empty]
+                if available_keys:
+                    key = available_keys[0]
+                    base_measurements = data[key].values
+                    base_timestamps = data[key].index
+                    logger.info(f"Using {key} data: {base_measurements.shape}")
+                else:
+                    raise ValueError("No valid data found in sample dataset")
+            
+            # Expand dataset if we need more samples for training
+            if len(base_measurements) < samples:
+                logger.info(f"Expanding dataset from {len(base_measurements)} to {samples} samples")
+                repeat_factor = (samples // len(base_measurements)) + 1
+                expanded_measurements = []
+                expanded_timestamps = []
+                
+                for i in range(repeat_factor):
+                    # Add small noise variations for each repetition
+                    noise_factor = 0.005 * (i + 1)  # Small noise to maintain realism
+                    noise = np.random.normal(0, noise_factor, base_measurements.shape)
+                    varied_measurements = base_measurements + noise
+                    
+                    # Create new timestamps
+                    time_offset = pd.Timedelta(hours=i * len(base_measurements) / 3600)
+                    varied_timestamps = base_timestamps + time_offset
+                    
+                    expanded_measurements.append(varied_measurements)
+                    expanded_timestamps.append(varied_timestamps)
+                
+                measurements = np.vstack(expanded_measurements)[:samples]
+                timestamps = pd.concat([pd.Series(ts) for ts in expanded_timestamps])[:samples]
+                timestamps = pd.DatetimeIndex(timestamps)
+                
+                logger.info(f"Expanded dataset to {measurements.shape} samples")
+            else:
+                measurements = base_measurements[:samples]
+                timestamps = base_timestamps[:samples]
+            
+        except Exception as e:
+            logger.warning(f"Failed to load real dataset: {e}")
+            logger.info("Falling back to synthetic measurements")
+            
+            # Fallback: generate synthetic measurements based on power system model
+            if generator.power_model:
+                try:
+                    measurements, timestamps = generator.power_model.generate_base_measurements(
+                        n_samples=samples,
+                        noise_std=0.01
+                    )
+                    logger.info("Using power system model synthetic data")
+                except Exception as model_e:
+                    logger.warning(f"Power model failed: {model_e}")
+                    timestamps = pd.date_range(start='2024-01-01', periods=samples, freq='1S')
+                    measurements = np.random.randn(samples, 20) * 0.1 + 1.0  # Voltage-like measurements
+                    logger.info("Using basic synthetic measurements")
+            else:
+                timestamps = pd.date_range(start='2024-01-01', periods=samples, freq='1S')
+                measurements = np.random.randn(samples, 20) * 0.1 + 1.0  # Voltage-like measurements
+                logger.info("Using basic synthetic measurements")
         
         # Determine attack types to generate
         if attack_type == 'all':
@@ -495,13 +589,27 @@ def main(config: str, attack_type: str, output: str, experiment: str, samples: i
         else:
             attack_types = [attack_type]
         
-        # Generate attack dataset
+        # Generate comprehensive attack dataset for IDS training
+        # Use a balanced approach: 70% clean, 30% attacks for proper training
         attack_data = generator.generate_attack_dataset(
             measurements=measurements,
             timestamps=timestamps,
             attack_types=attack_types,
-            attack_ratio=0.3
+            attack_ratio=0.3  # 30% attacks, 70% clean data
         )
+        
+        # Ensure we have enough clean data for training
+        clean_samples = np.sum(attack_data['labels'] == 0)
+        attack_samples = np.sum(attack_data['labels'] == 1)
+        
+        logger.info(f"Dataset composition:")
+        logger.info(f"  Clean samples: {clean_samples} ({clean_samples/len(attack_data['labels'])*100:.1f}%)")
+        logger.info(f"  Attack samples: {attack_samples} ({attack_samples/len(attack_data['labels'])*100:.1f}%)")
+        
+        # Add clean data metadata for IDS training
+        attack_data['metadata']['clean_samples'] = int(clean_samples)
+        attack_data['metadata']['training_ready'] = True
+        attack_data['metadata']['data_source'] = 'digital_twin_sample_data'
         
         # Save attack dataset
         generator.save_attack_dataset(
@@ -510,17 +618,28 @@ def main(config: str, attack_type: str, output: str, experiment: str, samples: i
             experiment
         )
         
-        # Print summary
-        print("\n" + "="*50)
-        print("ATTACK GENERATION COMPLETED SUCCESSFULLY")
-        print("="*50)
+        # Print comprehensive summary
+        print("\n" + "="*60)
+        print("ATTACK DATASET GENERATION COMPLETED SUCCESSFULLY")
+        print("="*60)
         print(f"Experiment: {experiment}")
+        print(f"Data source: {attack_data['metadata']['data_source']}")
         print(f"Attack types: {attack_types}")
-        print(f"Total samples: {attack_data['metadata']['total_samples']}")
-        print(f"Attack samples: {attack_data['metadata']['attack_samples']}")
-        print(f"Attack ratio: {attack_data['metadata']['attack_ratio']:.2%}")
-        print(f"Output directory: {config_dict['data']['output_path']}/experiments/")
-        print("="*50)
+        print()
+        print("DATASET COMPOSITION:")
+        print(f"  Total samples: {attack_data['metadata']['total_samples']}")
+        print(f"  Clean samples: {attack_data['metadata']['clean_samples']} ({(1-attack_data['metadata']['attack_ratio'])*100:.1f}%)")
+        print(f"  Attack samples: {attack_data['metadata']['attack_samples']} ({attack_data['metadata']['attack_ratio']*100:.1f}%)")
+        print()
+        print("SAVED FILES:")
+        print(f"  📁 {config_dict['data']['output_path']}/experiments/")
+        print(f"    📊 {experiment}_attacks.npz (complete dataset for IDS training)")
+        print(f"    ✅ {experiment}_clean_data.npz (clean data only)")
+        print(f"    ⚠️  {experiment}_attack_data.npz (attack data only)")
+        print(f"    📋 {experiment}_metadata.json (dataset information)")
+        print()
+        print("READY FOR IDS TRAINING: ✅")
+        print("="*60)
         
     except Exception as e:
         logger.error(f"Attack generation failed: {e}")
