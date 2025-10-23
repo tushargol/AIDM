@@ -1,0 +1,34 @@
+# Core data science libraries
+pandas>=1.5.0
+numpy>=1.21.0
+scikit-learn>=1.1.0
+imbalanced-learn>=0.9.0
+joblib>=1.2.0
+
+# Deep learning
+tensorflow>=2.10.0
+# torch>=1.12.0  # Alternative to TensorFlow
+
+# Power systems
+pandapower>=2.11.0
+
+# Adversarial ML
+adversarial-robustness-toolbox>=1.12.0
+
+# Visualization
+matplotlib>=3.5.0
+seaborn>=0.11.0
+plotly>=5.10.0
+
+# Configuration and utilities
+pyyaml>=6.0
+tqdm>=4.64.0
+click>=8.0.0
+
+# Jupyter notebooks
+jupyter>=1.0.0
+ipykernel>=6.15.0
+ipywidgets>=7.7.0
+
+# Optional: for better performance
+numba>=0.56.0

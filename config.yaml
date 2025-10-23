@@ -1,0 +1,104 @@
+# AIDM Configuration File
+# Adjust these parameters based on your computational resources and requirements
+
+# Data paths
+data:
+  dataset_path: "./digital-twin-dataset/digital-twin-dataset"
+  sample_dataset_path: "./digital-twin-dataset/digital-twin-dataset/sample_dataset"
+  output_path: "./outputs"
+  
+# Processing parameters
+preprocessing:
+  base_sampling_rate: 1.0  # seconds
+  sequence_window: 10      # timesteps for LSTM sequences
+  train_split: 0.7
+  val_split: 0.15
+  test_split: 0.15
+  max_gap_fill: 5          # max seconds to forward-fill missing data
+  rolling_window: 5        # window for rolling statistics
+  
+# Feature engineering
+features:
+  waveform_fft_components: 5  # number of FFT components to extract
+  enable_rolling_stats: true
+  enable_topology_features: true
+  
+# Model architectures
+models:
+  autoencoder:
+    latent_dim: 32
+    hidden_layers: [128, 64]
+    dropout_rate: 0.1
+    learning_rate: 0.001
+    batch_size: 64
+    epochs: 50
+    
+  lstm_forecaster:
+    units: 64
+    dropout_rate: 0.2
+    learning_rate: 0.001
+    batch_size: 32
+    epochs: 30
+    
+  ids_classifier:
+    rf_n_estimators: 100
+    rf_max_depth: 10
+    dnn_hidden_layers: [128, 64, 32]
+    dnn_dropout_rate: 0.3
+    dnn_learning_rate: 0.001
+    dnn_batch_size: 64
+    dnn_epochs: 40
+
+# Randomized transformations
+transformations:
+  n_transforms: 5
+  noise_std: 0.001
+  dropout_rate: 0.02
+  
+# Attack parameters
+attacks:
+  fdia:
+    max_attack_magnitude: 0.1  # relative to measurement std
+    rate_limit: 0.05           # max change per timestep
+    
+  temporal_stealth:
+    max_duration: 20           # timesteps
+    max_step_size: 0.02
+    
+  replay:
+    min_window_size: 5
+    max_window_size: 15
+    
+  art_attacks:
+    fgsm_eps: [0.01, 0.05, 0.1, 0.2]
+    pgd_eps: [0.01, 0.05, 0.1]
+    pgd_steps: 10
+    pgd_step_size: 0.01
+
+# Detection thresholds
+thresholds:
+  autoencoder_multiplier: 2.0    # threshold = mean + multiplier * std
+  lstm_multiplier: 2.5
+  transformation_multiplier: 1.5
+  
+# Fusion parameters
+fusion:
+  method: "weighted_sum"  # options: "weighted_sum", "voting", "meta_classifier"
+  weights: [0.4, 0.3, 0.3]  # [AE, transforms, LSTM]
+  
+# Evaluation
+evaluation:
+  metrics: ["accuracy", "precision", "recall", "f1", "auc"]
+  cross_validation_folds: 5
+  
+# Computational settings
+compute:
+  small_data_mode: true      # use only sample dataset
+  n_jobs: -1                 # parallel processing (-1 = all cores)
+  random_seed: 42
+  gpu_memory_limit: 4096     # MB, set to null for no limit
+  
+# Logging
+logging:
+  level: "INFO"              # DEBUG, INFO, WARNING, ERROR
+  log_file: "./outputs/aidm.log"
