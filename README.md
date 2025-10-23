@@ -47,10 +47,19 @@ This project implements an **AIDM (Anomaly and Intrusion Detection Model)** syst
 
 ### 1. Environment Setup
 
+Choose one of the following methods to create an isolated Python environment:
+
+#### Option A: Conda Environment (Recommended for ML Projects)
+
 ```bash
-# Create virtual environment (recommended)
-python -m venv aidm_env
-source aidm_env/bin/activate  # On Windows: aidm_env\Scripts\activate
+# Install Miniconda (if not already installed)
+# Download from: https://docs.conda.io/en/latest/miniconda.html
+
+# Create conda environment with Python 3.9
+conda create -n aidm python=3.9 -y
+
+# Activate environment
+conda activate aidm
 
 # Install dependencies
 pip install -r requirements.txt
@@ -58,6 +67,48 @@ pip install -r requirements.txt
 # Verify installation
 python -c "import tensorflow as tf; print('TensorFlow:', tf.__version__)"
 python -c "import pandapower as pp; print('Pandapower installed')"
+
+# To deactivate when done
+conda deactivate
+```
+
+#### Option B: Python Virtual Environment
+
+```bash
+# Create virtual environment
+python -m venv aidm_env
+
+# Activate environment
+# On Windows:
+aidm_env\Scripts\activate
+# On Linux/macOS:
+source aidm_env/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Verify installation
+python -c "import tensorflow as tf; print('TensorFlow:', tf.__version__)"
+python -c "import pandapower as pp; print('Pandapower installed')"
+
+# To deactivate when done
+deactivate
+```
+
+#### Option C: Using Specific Python Version
+
+```bash
+# If you have multiple Python versions installed
+# Windows:
+py -3.9 -m venv aidm_env
+aidm_env\Scripts\activate
+
+# Linux/macOS:
+python3.9 -m venv aidm_env
+source aidm_env/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
 ```
 
 ### 2. Configuration
@@ -414,11 +465,79 @@ Key parameters in `config.yaml`:
 
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+### Development Workflow
+
+1. **Fork the repository**
+2. **Clone and setup environment**
+   ```bash
+   git clone https://github.com/your-username/AIDM.git
+   cd AIDM
+   conda create -n aidm python=3.9 -y
+   conda activate aidm
+   pip install -r requirements.txt
+   ```
+
+3. **Create a feature branch**
+   ```bash
+   git checkout -b feature/amazing-feature
+   ```
+
+4. **Make your changes and commit**
+   ```bash
+   git add .
+   git commit -m "feat: add amazing feature"
+   ```
+
+5. **Push to your fork and create a Pull Request**
+   ```bash
+   git push origin feature/amazing-feature
+   ```
+
+### Commit Message Guidelines
+
+Use conventional commit format for clear project history:
+
+#### **Format:**
+```
+<type>(<scope>): <description>
+
+[optional body]
+```
+
+#### **Types:**
+- `feat`: New feature
+- `fix`: Bug fix
+- `docs`: Documentation changes
+- `style`: Code style changes (formatting, etc.)
+- `refactor`: Code refactoring
+- `test`: Adding or updating tests
+- `chore`: Maintenance tasks
+
+#### **Examples:**
+```bash
+# New feature
+git commit -m "feat: add LSTM forecaster component"
+
+# Bug fix
+git commit -m "fix: resolve notebook data loading path issue"
+
+# Documentation
+git commit -m "docs: add environment setup tutorial"
+
+# Multiple changes
+git commit -m "chore: improve project setup and fix notebook issues
+
+- Fix relative path resolution in training notebook
+- Add comprehensive .gitignore for ML artifacts
+- Exclude outputs/, model files, and experiment data"
+```
+
+#### **Scopes (optional):**
+- `models`: Model-related changes
+- `data`: Data processing changes
+- `attacks`: Attack generation changes
+- `eval`: Evaluation changes
+- `config`: Configuration changes
 
 ## License
 
