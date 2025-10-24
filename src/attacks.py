@@ -44,12 +44,16 @@ class AttackGenerator:
         self.power_model = None
         self.jacobian = None
         
-    def initialize_power_model(self) -> None:
+    def initialize_power_model(self, n_measurements: int = None) -> None:
         """Initialize the power system model for FDIA generation."""
         try:
             self.power_model = create_power_system_model(self.config)
-            self.jacobian = self.power_model.compute_jacobian()
-            logger.info(f"Initialized power model with Jacobian shape: {self.jacobian.shape}")
+            if n_measurements is not None:
+                self.jacobian = self.power_model.compute_jacobian(n_measurements=n_measurements)
+                logger.info(f"Initialized power model with Jacobian shape: {self.jacobian.shape} (matched to {n_measurements} measurements)")
+            else:
+                self.jacobian = self.power_model.compute_jacobian()
+                logger.info(f"Initialized power model with Jacobian shape: {self.jacobian.shape}")
         except Exception as e:
             logger.error(f"Failed to initialize power model: {e}")
             self.power_model = None
@@ -72,12 +76,23 @@ class AttackGenerator:
         Returns:
             Attacked measurements z_adv
         """
+        n_measurements = len(z)
+        
         if H is None:
             if self.jacobian is not None:
                 H = self.jacobian
+                # Check dimension compatibility
+                if H.shape[0] != n_measurements:
+                    logger.warning(f"Jacobian dimension mismatch: H.shape[0]={H.shape[0]}, z.shape[0]={n_measurements}")
+                    logger.info("Using identity matrix for FDIA")
+                    H = np.eye(n_measurements)
             else:
                 logger.warning("No Jacobian available, using identity matrix")
-                H = np.eye(len(z))
+                H = np.eye(n_measurements)
+        else:
+            # Validate provided Jacobian dimensions
+            if H.shape[0] != n_measurements:
+                raise ValueError(f"Jacobian dimension mismatch: H.shape[0]={H.shape[0]}, z.shape[0]={n_measurements}")
         
         if c is None:
             # Generate random attack vector
@@ -95,6 +110,11 @@ class AttackGenerator:
         
         # Compute attack on measurements: a = H * c
         a = H @ c_scaled
+        
+        # Verify attack vector dimensions match measurement vector
+        if len(a) != n_measurements:
+            logger.error(f"Attack vector dimension mismatch: a.shape={a.shape}, z.shape={z.shape}")
+            raise ValueError(f"Attack vector dimension mismatch: expected {n_measurements}, got {len(a)}")
         
         # Apply rate limiting
         rate_limit = self.config['attacks']['fdia']['rate_limit']
@@ -494,9 +514,8 @@ def main(config: str, attack_type: str, output: str, experiment: str, samples: i
         config_dict['data']['output_path'] = output
     
     try:
-        # Initialize attack generator
+        # Initialize attack generator (without Jacobian first)
         generator = AttackGenerator(config_dict)
-        generator.initialize_power_model()
         
         # Load sample data from digital-twin-dataset as foundation
         try:
@@ -561,6 +580,11 @@ def main(config: str, attack_type: str, output: str, experiment: str, samples: i
                 measurements = base_measurements[:samples]
                 timestamps = base_timestamps[:samples]
             
+            # Now initialize power model with correct measurement dimensions
+            n_measurements = measurements.shape[1]
+            logger.info(f"Initializing power model for {n_measurements} measurements")
+            generator.initialize_power_model(n_measurements=n_measurements)
+            
         except Exception as e:
             logger.warning(f"Failed to load real dataset: {e}")
             logger.info("Falling back to synthetic measurements")
@@ -582,6 +606,11 @@ def main(config: str, attack_type: str, output: str, experiment: str, samples: i
                 timestamps = pd.date_range(start='2024-01-01', periods=samples, freq='1S')
                 measurements = np.random.randn(samples, 20) * 0.1 + 1.0  # Voltage-like measurements
                 logger.info("Using basic synthetic measurements")
+            
+            # Initialize power model with synthetic data dimensions
+            n_measurements = measurements.shape[1]
+            logger.info(f"Initializing power model for {n_measurements} synthetic measurements")
+            generator.initialize_power_model(n_measurements=n_measurements)
         
         # Determine attack types to generate
         if attack_type == 'all':
@@ -632,13 +661,13 @@ def main(config: str, attack_type: str, output: str, experiment: str, samples: i
         print(f"  Attack samples: {attack_data['metadata']['attack_samples']} ({attack_data['metadata']['attack_ratio']*100:.1f}%)")
         print()
         print("SAVED FILES:")
-        print(f"  📁 {config_dict['data']['output_path']}/experiments/")
-        print(f"    📊 {experiment}_attacks.npz (complete dataset for IDS training)")
-        print(f"    ✅ {experiment}_clean_data.npz (clean data only)")
-        print(f"    ⚠️  {experiment}_attack_data.npz (attack data only)")
-        print(f"    📋 {experiment}_metadata.json (dataset information)")
+        print(f"  {config_dict['data']['output_path']}/experiments/")
+        print(f"    {experiment}_attacks.npz (complete dataset for IDS training)")
+        print(f"    {experiment}_clean_data.npz (clean data only)")
+        print(f"    {experiment}_attack_data.npz (attack data only)")
+        print(f"    {experiment}_metadata.json (dataset information)")
         print()
-        print("READY FOR IDS TRAINING: ✅")
+        print("READY FOR IDS TRAINING: YES")
         print("="*60)
         
     except Exception as e:

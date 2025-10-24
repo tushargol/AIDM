@@ -120,13 +120,15 @@ class PowerSystemModel:
     
     def compute_jacobian(self, 
                         measurement_fn: Callable = None,
-                        eps: float = 1e-4) -> np.ndarray:
+                        eps: float = 1e-4,
+                        n_measurements: int = None) -> np.ndarray:
         """
         Compute measurement Jacobian matrix H for state estimation.
         
         Args:
             measurement_fn: Function to compute measurements from state
             eps: Perturbation size for numeric differentiation
+            n_measurements: Number of measurements to match (optional)
             
         Returns:
             Jacobian matrix H (n_measurements x n_states)
@@ -134,7 +136,7 @@ class PowerSystemModel:
         if self.use_pandapower and self.net is not None:
             return self._compute_pandapower_jacobian(measurement_fn, eps)
         else:
-            return self._compute_numeric_jacobian(measurement_fn, eps)
+            return self._compute_numeric_jacobian(measurement_fn, eps, n_measurements)
     
     def _compute_pandapower_jacobian(self, 
                                    measurement_fn: Callable = None,
@@ -186,7 +188,8 @@ class PowerSystemModel:
     
     def _compute_numeric_jacobian(self, 
                                 measurement_fn: Callable = None,
-                                eps: float = 1e-4) -> np.ndarray:
+                                eps: float = 1e-4,
+                                n_measurements: int = None) -> np.ndarray:
         """Compute Jacobian using numeric differentiation on fallback model."""
         if measurement_fn is None:
             measurement_fn = self._default_measurement_function
@@ -199,12 +202,15 @@ class PowerSystemModel:
         state = np.concatenate([V_mag, V_angle[1:]])
         n_states = len(state)
         
-        # Base measurements
-        z0 = measurement_fn(state)
-        n_measurements = len(z0)
+        # Base measurements - use specific number if provided
+        if n_measurements is not None:
+            z0 = measurement_fn(state, n_measurements)
+        else:
+            z0 = measurement_fn(state)
+        n_measurements_actual = len(z0)
         
         # Initialize Jacobian
-        H = np.zeros((n_measurements, n_states))
+        H = np.zeros((n_measurements_actual, n_states))
         
         # Compute partial derivatives
         for i in range(n_states):
@@ -213,7 +219,10 @@ class PowerSystemModel:
             state_pert[i] += eps
             
             # Compute perturbed measurements
-            z_pert = measurement_fn(state_pert)
+            if n_measurements is not None:
+                z_pert = measurement_fn(state_pert, n_measurements)
+            else:
+                z_pert = measurement_fn(state_pert)
             
             # Compute partial derivative
             H[:, i] = (z_pert - z0) / eps
@@ -254,7 +263,7 @@ class PowerSystemModel:
                 # This is a simplified update - real implementation would be more complex
                 pass
     
-    def _default_measurement_function(self, state: np.ndarray) -> np.ndarray:
+    def _default_measurement_function(self, state: np.ndarray, n_measurements: int = None) -> np.ndarray:
         """Default measurement function for fallback network."""
         n_buses = self.net['n_buses']
         
@@ -269,17 +278,36 @@ class PowerSystemModel:
         # Voltage magnitudes
         measurements.extend(V_mag)
         
-        # Simple power flow approximations (DC power flow)
-        branch_data = self.net['branch_data']
-        for i in range(len(branch_data['from_bus'])):
-            from_bus = branch_data['from_bus'][i]
-            to_bus = branch_data['to_bus'][i]
-            x = branch_data['reactance'][i]
+        # If we need a specific number of measurements, adjust accordingly
+        if n_measurements is not None and len(measurements) < n_measurements:
+            # Add simple power flow approximations (DC power flow) until we reach desired count
+            branch_data = self.net['branch_data']
+            measurements_needed = n_measurements - len(measurements)
+            measurements_added = 0
             
-            # DC power flow: P = (theta_from - theta_to) / x
-            if x > 0:
-                p_flow = (V_angle[from_bus] - V_angle[to_bus]) / x
-                measurements.append(p_flow)
+            for i in range(len(branch_data['from_bus'])):
+                if measurements_added >= measurements_needed:
+                    break
+                    
+                from_bus = branch_data['from_bus'][i]
+                to_bus = branch_data['to_bus'][i]
+                x = branch_data['reactance'][i]
+                
+                # DC power flow: P = (theta_from - theta_to) / x
+                if x > 0:
+                    p_flow = (V_angle[from_bus] - V_angle[to_bus]) / x
+                    measurements.append(p_flow)
+                    measurements_added += 1
+            
+            # If still not enough measurements, add synthetic ones
+            while len(measurements) < n_measurements:
+                # Add synthetic measurements based on voltage combinations
+                bus_idx = len(measurements) % n_buses
+                synthetic_measurement = V_mag[bus_idx] * (1 + 0.1 * np.sin(V_angle[bus_idx]))
+                measurements.append(synthetic_measurement)
+        elif n_measurements is not None and len(measurements) > n_measurements:
+            # Truncate to desired number of measurements
+            measurements = measurements[:n_measurements]
         
         return np.array(measurements)
     

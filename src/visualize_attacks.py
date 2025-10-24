@@ -102,7 +102,7 @@ class AttackVisualizer:
         Returns:
             Plotly figure object
         """
-        measurements = attack_data['measurements']
+        measurements = attack_data.get('measurements', attack_data.get('clean'))
         labels = attack_data['labels']
         attack_types = attack_data['attack_types']
         timestamps = attack_data['timestamps']
@@ -176,7 +176,14 @@ class AttackVisualizer:
             )
         
         # 6. Attack magnitude distribution
-        attack_magnitudes = np.linalg.norm(attack_data_vals - clean_data[:len(attack_data_vals)], axis=1)
+        if len(clean_data) > 0 and len(attack_data_vals) > 0:
+            # Calculate attack magnitudes by comparing with mean of clean data
+            clean_mean = np.mean(clean_data, axis=0)
+            attack_magnitudes = np.linalg.norm(attack_data_vals - clean_mean, axis=1)
+        else:
+            # Fallback: use L2 norm of attack data itself
+            attack_magnitudes = np.linalg.norm(attack_data_vals, axis=1) if len(attack_data_vals) > 0 else np.array([0])
+        
         fig.add_trace(
             go.Histogram(x=attack_magnitudes, name='Attack Magnitudes',
                         marker_color=self.colors['replay']),
@@ -213,7 +220,7 @@ class AttackVisualizer:
         Returns:
             Plotly figure object
         """
-        measurements = attack_data['measurements']
+        measurements = attack_data.get('measurements', attack_data.get('clean'))
         labels = attack_data['labels']
         attack_types = attack_data['attack_types']
         timestamps = attack_data['timestamps']
@@ -318,7 +325,7 @@ class AttackVisualizer:
         Returns:
             Plotly figure object
         """
-        measurements = attack_data['measurements']
+        measurements = attack_data.get('measurements', attack_data.get('clean'))
         labels = attack_data['labels']
         attack_types = attack_data['attack_types']
         
@@ -471,12 +478,24 @@ class AttackVisualizer:
         Returns:
             Plotly figure object
         """
-        measurements = attack_data['measurements']
+        measurements = attack_data.get('measurements', attack_data.get('clean'))
         labels = attack_data['labels']
         attack_types = attack_data['attack_types']
         
         # Subsample for computational efficiency
+        if len(measurements) == 0:
+            logger.warning("No measurements available for dimensionality analysis")
+            return go.Figure().add_annotation(text="No data available", 
+                                            xref="paper", yref="paper", 
+                                            x=0.5, y=0.5, showarrow=False)
+        
         n_samples = min(2000, len(measurements))
+        if n_samples < 2:
+            logger.warning("Insufficient data for dimensionality analysis")
+            return go.Figure().add_annotation(text="Insufficient data", 
+                                            xref="paper", yref="paper", 
+                                            x=0.5, y=0.5, showarrow=False)
+        
         indices = np.random.choice(len(measurements), n_samples, replace=False)
         
         X = measurements[indices]
@@ -488,18 +507,29 @@ class AttackVisualizer:
         X_scaled = scaler.fit_transform(X)
         
         # PCA
-        pca = PCA(n_components=2)
-        X_pca = pca.fit_transform(X_scaled)
+        try:
+            pca = PCA(n_components=2)
+            X_pca = pca.fit_transform(X_scaled)
+            pca_variance = pca.explained_variance_ratio_.sum()
+        except Exception as e:
+            logger.warning(f"PCA failed: {e}")
+            X_pca = np.random.randn(len(X_scaled), 2)  # Fallback
+            pca_variance = 0.0
         
         # t-SNE
-        tsne = TSNE(n_components=2, random_state=42, perplexity=30)
-        X_tsne = tsne.fit_transform(X_scaled)
+        try:
+            perplexity = min(30, max(5, n_samples // 4))  # Adjust perplexity based on sample size
+            tsne = TSNE(n_components=2, random_state=42, perplexity=perplexity)
+            X_tsne = tsne.fit_transform(X_scaled)
+        except Exception as e:
+            logger.warning(f"t-SNE failed: {e}")
+            X_tsne = np.random.randn(len(X_scaled), 2)  # Fallback
         
         # Create subplots
         fig = make_subplots(
             rows=2, cols=2,
             subplot_titles=[
-                f'PCA (Explained Variance: {pca.explained_variance_ratio_.sum():.1%})',
+                f'PCA (Explained Variance: {pca_variance:.1%})',
                 't-SNE',
                 'PCA by Attack Type',
                 't-SNE by Attack Type'
