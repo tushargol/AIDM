@@ -624,23 +624,111 @@ if __name__ == "__main__":
         }
     }
     
-    # Create synthetic data
+    # Create realistic synthetic PMU data
     np.random.seed(42)
-    n_samples = 500
-    n_features = 20
-    seq_length = 10
     
-    X_tabular = np.random.randn(n_samples, n_features)
-    X_sequences = np.random.randn(n_samples, seq_length, n_features)
-    y_sequences = np.mean(X_sequences, axis=1) + 0.1 * np.random.randn(n_samples, n_features)
+    # Generate physics-based synthetic data using data loader
+    from data_loader import DigitalTwinDataLoader
     
-    # Add anomalies
-    anomaly_indices = np.random.choice(n_samples, 50, replace=False)
-    X_tabular[anomaly_indices] += np.random.randn(50, n_features) * 2
-    y_sequences[anomaly_indices] += np.random.randn(50, n_features) * 2
+    # Initialize data loader
+    dataset_path = "./digital-twin-dataset/digital-twin-dataset"  # Placeholder path
+    loader = DigitalTwinDataLoader(dataset_path, use_api=False)
     
+    # Generate realistic PMU data for training (benign only)
+    print("Generating physics-based synthetic PMU data...")
+    train_duration = 0.5  # hours
+    test_duration = 0.2   # hours
+    sampling_rate = 1.0   # Hz
+    n_buses = 12
+    
+    # Generate training data (benign only)
+    train_data = loader.generate_synthetic_data(
+        duration_hours=train_duration,
+        sampling_rate=sampling_rate,
+        n_buses=n_buses,
+        physics_based=True
+    )
+    
+    # Generate test data (benign only, will add attacks later)
+    test_data = loader.generate_synthetic_data(
+        duration_hours=test_duration,
+        sampling_rate=sampling_rate,
+        n_buses=n_buses,
+        physics_based=True
+    )
+    
+    # Process data through preprocessing pipeline
+    from preprocess import DataPreprocessor
+    preprocessor = DataPreprocessor(config)
+    
+    # Combine and preprocess training data
+    combined_train_data = {
+        'magnitude': train_data['magnitude'],
+        'phasor': train_data['phasor'],
+        'topology': train_data['topology']
+    }
+    
+    # Align and extract features for training data
+    train_aligned = preprocessor.align_and_resample(combined_train_data)
+    train_clean = preprocessor.handle_missing_data(train_aligned)
+    train_features = preprocessor.extract_features(train_clean)
+    
+    # Create sequences for training
+    X_seq_train, y_seq_train, X_tab_train = preprocessor.create_sequences(train_features)
+    
+    # Process test data similarly
+    combined_test_data = {
+        'magnitude': test_data['magnitude'],
+        'phasor': test_data['phasor'],
+        'topology': test_data['topology']
+    }
+    
+    test_aligned = preprocessor.align_and_resample(combined_test_data)
+    test_clean = preprocessor.handle_missing_data(test_aligned)
+    test_features = preprocessor.extract_features(test_clean)
+    
+    # Create sequences for test data
+    X_seq_test, y_seq_test, X_tab_test = preprocessor.create_sequences(test_features)
+    
+    # Add anomalies to test data only (50% of test samples)
+    n_test = len(X_tab_test)
+    n_anomalies = n_test // 2
+    anomaly_indices = np.random.choice(n_test, n_anomalies, replace=False)
+    
+    # Add realistic anomalies (not just random noise)
+    attack_magnitude = 0.1  # 10% of standard deviation
+    for idx in anomaly_indices:
+        # Add structured anomalies that could represent real attacks
+        std_vals = np.std(X_tab_test, axis=0)
+        attack_vector = attack_magnitude * std_vals * np.random.randn(X_tab_test.shape[1])
+        X_tab_test[idx] += attack_vector
+        y_seq_test[idx] += attack_magnitude * np.std(y_seq_test, axis=0) * np.random.randn(y_seq_test.shape[1])
+    
+    # Combine training and test data for pipeline demonstration
+    X_tabular = np.vstack([X_tab_train, X_tab_test])
+    X_sequences = np.vstack([X_seq_train, X_seq_test])
+    y_sequences = np.vstack([y_seq_train, y_seq_test])
+    
+    # Create labels (0 for all training data, 0/1 for test data)
+    n_train = len(X_tab_train)
+    n_samples = len(X_tabular)
     y_labels = np.zeros(n_samples)
-    y_labels[anomaly_indices] = 1
+    y_labels[n_train + anomaly_indices] = 1
+    
+    # Update dimensions
+    n_features = X_tabular.shape[1]
+    seq_length = X_sequences.shape[1]
+    
+    print(f"Generated realistic PMU data:")
+    print(f"  Training samples: {n_train} (all benign)")
+    print(f"  Test samples: {n_test} ({n_test - n_anomalies} benign + {n_anomalies} anomalous)")
+    print(f"  Features: {n_features}")
+    print(f"  Sequence length: {seq_length}")
+    
+    # Split training and test data for proper training
+    X_tabular_benign = X_tab_train
+    X_sequences_benign = X_seq_train
+    y_sequences_benign = y_seq_train
     
     # Create and initialize pipeline
     pipeline = create_aidm_pipeline(config)
@@ -661,7 +749,15 @@ if __name__ == "__main__":
     }
     pipeline.fusion_classifier.set_thresholds(pipeline.thresholds)
     
-    # Run pipeline
+    # Train models on benign data only (first n_train samples)
+    print(f"Training models on {n_train} benign samples...")
+    if hasattr(pipeline.autoencoder, 'train'):
+        pipeline.autoencoder.train(X_tabular_benign)
+    if hasattr(pipeline.lstm_forecaster, 'train'):
+        pipeline.lstm_forecaster.train(X_sequences_benign, y_sequences_benign)
+    
+    # Run pipeline on all data (including test data with anomalies)
+    print(f"Testing pipeline on {n_samples} samples ({n_train} benign + {n_test - n_anomalies} benign + {n_anomalies} anomalous)...")
     results = pipeline.run_pipeline_on_set(X_tabular, X_sequences, y_sequences)
     
     print("Pipeline results:")
@@ -670,3 +766,22 @@ if __name__ == "__main__":
             print(f"  {key}: shape {value.shape}, anomalies: {np.sum(value) if value.dtype == bool else 'N/A'}")
         else:
             print(f"  {key}: {value}")
+    
+    # Evaluate performance on test data only
+    if 'fusion_flags' in results:
+        test_predictions = results['fusion_flags'][n_train:]  # Only test portion
+        test_labels = y_labels[n_train:]  # Only test portion
+        
+        from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+        accuracy = accuracy_score(test_labels, test_predictions)
+        precision = precision_score(test_labels, test_predictions, zero_division=0)
+        recall = recall_score(test_labels, test_predictions, zero_division=0)
+        f1 = f1_score(test_labels, test_predictions, zero_division=0)
+        
+        print(f"\nTest Performance (on {n_test} test samples):")
+        print(f"  Accuracy: {accuracy:.3f}")
+        print(f"  Precision: {precision:.3f}")
+        print(f"  Recall: {recall:.3f}")
+        print(f"  F1-Score: {f1:.3f}")
+        print(f"  True anomalies: {np.sum(test_labels)}")
+        print(f"  Detected anomalies: {np.sum(test_predictions)}")

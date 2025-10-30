@@ -161,6 +161,21 @@ class DataPreprocessor:
                     feature_df = pd.concat([feature_df, dummies], axis=1)
                     feature_df.drop(col, axis=1, inplace=True)
         
+        # Frequency features if enabled
+        if self.config['features'].get('enable_frequency_features', False):
+            frequency_cols = [col for col in df.columns if 'frequency_' in col or col in ['system_frequency', 'rocof']]
+            for col in frequency_cols:
+                if col in df.columns:
+                    # Add frequency deviation features
+                    if 'frequency' in col and 'rocof' not in col:
+                        nominal_freq = 60.0  # Hz (could be configurable)
+                        feature_df[f'{col}_deviation'] = df[col] - nominal_freq
+                        feature_df[f'{col}_deviation_abs'] = np.abs(df[col] - nominal_freq)
+                    
+                    # Add ROCOF magnitude for stability analysis
+                    if 'rocof' in col:
+                        feature_df[f'{col}_magnitude'] = np.abs(df[col])
+        
         # Waveform features (placeholder - would extract FFT components in real implementation)
         waveform_cols = [col for col in df.columns if 'waveform_' in col]
         if waveform_cols and self.config['features']['waveform_fft_components'] > 0:

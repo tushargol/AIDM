@@ -22,6 +22,7 @@ features:
   waveform_fft_components: 5  # number of FFT components to extract
   enable_rolling_stats: true
   enable_topology_features: true
+  enable_frequency_features: true  # enable frequency and ROCOF features
   
 # Model architectures
 models:
